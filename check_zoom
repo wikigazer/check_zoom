@@ -1,0 +1,429 @@
+#!/bin/sh
+
+# Name        check_zoom
+
+# Purpose     Installing Zoom in Mageia Linux (both 32 and 64 bit).
+#             Check for newer version of this script
+#             Install pre-requisite rpm:
+#                 32bit => libxcb-xtest0
+#                 64bit => lib64xcb-xtest0 
+#             Install zoom's Linux package signing key.
+#             Check for new version of zoom rpm.
+#             Download and compare with previous installed version.
+#             If newer version then install.
+
+# Reference   https://wiki.mageia.org/en/Using_Zoom_communication_application
+#             https://github.com/wikigazer/check_zoom.git
+
+              version=2
+
+# Author      paul[dot]blackburn[at]gmail[dot]com
+# Written     2020_06_11
+# Updated     Sat  5 Nov 19:53:52 GMT 2022
+
+# 2022_11_05  version 2
+# 2022_11_05  updated for Mageia 9, tidy up completion messages and check for latest version of check_zoom on github
+# 2022_11_05  tidy up completion messages and check for latest version of check_zoom on github
+# 2022_11_05  check for latest version of check_zoom on github
+#
+# 2020_06_13  re-organized, using functions
+# 2020_06_11  first draft
+
+# Usage       check_zoom [-help]
+#             Run as non-root user.  If root needed the script will prompt for root authentication.
+#             Idempotent: run from time to time to check if there is a new upstream copy of the RPM.
+#             (There is no official urpmi rpm repository for zoom.)
+
+# Assumptions:
+#             o The latest available rpm is in:
+#                 64bit => https://zoom.us/client/latest/zoom_x86_64.rpm
+#                 32bit => https://zoom.us/client/latest/zoom_i686.rpm
+#
+#             o We are installing on 32 or 64-bit Mageia Linux versions 6/7 
+#             o We will use the Fedora rpm (as "closest" to Mageia - no Mageia port available)
+#             o We use urpmi options: "--allow-nodeps --force" because of Fedora rpm
+#             o There is at least 100mb of free disk space in ${HOME}/Downloads/
+#
+#             o Local downloaded copy will be:
+#                 64bit => ~/Downloads/zoom/zoom_x86_64.rpm
+#                 32bit => ~/Downloads/zoom/zoom_i686.rpm
+#
+#             o Current user is authorised to run /bin/sudo for the install part.
+#
+# Note        
+#             tested on Mageia 7,8,9 both 32 bit and 64 bit
+
+# functions -------------------------------------------------------------
+
+usage() {
+
+        cat <<eeooff
+${cmd} checks for latest version of Zoom and installs if new version found.
+Run as non-root user. If an update is needed, sudo will prompt for password.
+Downloaded zoom rpm stored in: ~/Downloads/zoom/
+eeooff
+
+}
+
+fatal() {
+        echo "${cmd} fatal: ${1}" >&2
+        exit 1
+}
+
+error() {
+        echo "${cmd} error: ${1}" >&2
+}
+
+warning() {
+        echo "${cmd} warning: ${1}" >&2
+}
+
+tstamp() {
+        echo $(date +%Y_%m_%d_at_%H:%M:%S) ${cmd}: ${1}
+}
+
+doit() {
+        tstamp "${1}"
+        eval ${1}
+
+        retcode=$?
+        if [ ${retcode} != 0 ]; then
+                error "\$?=${retcode}"
+        fi
+}
+
+elapsed_time () {
+        start=${1}
+        end=${2}
+
+#       echo debug: elapsed_time ${start} ${end}
+        unset x
+        unset y
+
+        if [ ${start} = ${end} ]; then
+                echo -n "zero seconds"
+        fi
+
+        let elapsed_seconds=${end}-${start}
+        let days=${elapsed_seconds}/86400
+        let days_sec=${days}*86400
+
+        let x=${elapsed_seconds}-${days_sec}
+        let hours=${x}/3600
+        let hours_sec=${hours}*3600
+       
+        let x=${days_sec}+${hours_sec}
+        let y=${elapsed_seconds}-${x}
+        let mins=${y}/60
+        let mins_sec=${mins}*60
+
+        let x=${days_sec}+${hours_sec}+${mins_sec}
+        let secs=${elapsed_seconds}-${x}
+
+        if [ ${days} != 0 ]; then
+                if [ ${days} = 1 ]; then
+                        echo -n "1 day "
+                else
+                        echo -n "${days} days "
+                fi
+        fi
+
+        if [ ${hours} != 0 ]; then
+                if [ ${hours} = 1 ]; then
+                        echo -n "1 hour "
+                else
+                        echo -n "${hours} hours "
+                fi
+        fi
+
+        if [ ${mins} != 0 ]; then
+                if [ ${mins} = 1 ]; then
+                        echo -n "1 minute "
+                else
+                        echo -n "${mins} minutes "
+                fi
+        fi
+
+        if [ ${secs} != 0 ]; then
+                if [ ${secs} = 1 ]; then
+                        echo -n "1 second "
+                else
+                        echo -n "${secs} seconds"
+                fi
+        fi
+
+        echo
+}
+
+# end functions section
+
+
+# set initial values ----------------------------------------------------------------------
+
+cmd=$(basename ${0})
+cmd_path=${0}
+
+case "${1}" in
+        -? | -help | -usage | --?| --help | --usage )
+                usage
+                exit
+                ;;
+esac
+
+tstamp "commenced $(dirname ${0})/${cmd} version ${version}"
+
+start_epoch=$(date +%s)
+
+# Determine: 32 or 64 bit system
+
+arch=$(uname -m | sed -e "s/i.86/i686/")
+
+case ${arch} in
+	x86_64 )
+		ZOOM_RPM=zoom_x86_64.rpm
+		LIBXCB_RPM=lib64xcb-xtest0
+		;;
+	i686 )
+		ZOOM_RPM=zoom_i686.rpm
+		LIBXCB_RPM=libxcb-xtest0
+		;;
+        *) fatal "Architecture ${arch} is not supported. Bye!" >&2
+                ;;
+esac
+
+local_download_dir=${HOME}/Downloads/zoom
+
+if [ -d ${local_download_dir} ]; then
+	tstamp "local download directory is: ${local_download_dir}"
+else
+	tstamp "Creating local download directory: ${local_download_dir}"
+	doit "mkdir -p ${local_download_dir}"
+fi
+
+f=${local_download_dir}/${ZOOM_RPM}
+
+# Sanity checking starts here
+
+# Are we running on Mageia?
+distro=$(cat /etc/release | awk '{ print $1}')
+if [ "${distro}" != "Mageia" ]; then
+        fatal "Not running on Mageia. Bye!"
+fi
+
+# Are we running on Mageia 5,6,7,8, or 9?
+release=$(cat /etc/release | awk '{ print $3}')
+
+#echo "This is Mageia ${release}"
+case ${release} in 
+        8) tstamp "Mageia 9 OK"
+                urpmi_options="--allow-nodeps --force"
+                ;;
+        8) tstamp "Mageia 8 OK"
+                urpmi_options="--allow-nodeps --force"
+                ;;
+        7) tstamp "Mageia 7 OK"
+                urpmi_options="--allow-nodeps --force"
+                ;;
+        6) tstamp "Mageia 6 is obsolete. Please upgrade to current release."
+                urpmi_options="--allow-nodeps --force"
+                ;;
+        5) tstamp "Mageia 5 is obsolete. Please upgrade to current release."
+                urpmi_options="--allow-nodeps --force"
+                ;;
+        *) fatal "Not supported on Mageia ${release}. Bye!" 
+                ;;
+esac
+
+# We need to run as non-root
+if [ $(whoami) = "root" ]; then
+        fatal "You need to be non-root user to run ${cmd}. Bye!"
+fi
+
+# Check available free space in ${HOME}/Downloads/zoom
+
+free_space_in_KB=$(echo $(( $(df ${local_download_dir} | tail -1 | awk '{print $3}' | sed -e "s/K//" -e "s/M/*1024/" -e "s/G/*1024*1024/" -e "s/T/*1024*1024*1024/") )) )
+# MB_100_in_KB=$(( $(echo 100M |sed -e "s/K//" -e "s/M/*1024/" ) ))
+# 100M expressed in kilobytes (KB)
+MB_100_in_KB=102400
+
+if [ ${free_space_in_KB} -lt ${MB_100_in_KB} ]; then
+	fatal "Free space on disk is less than 100M. Bye!"
+else
+	tstamp "Good news: more than 100mb of free disk space available for download"
+fi
+
+
+tstamp "Check if newer version of this script, ${cmd} version ${version}, is available."
+
+# Download latest version from github and compare with running script
+# If match then we are already running latest script version.
+# Otherwise, display warning, show differences, and give details for downloading latest version.
+# Remove downloaded copy of script to avoid having multiple local copies each time script is run.
+
+tstamp "Downloading latest version of ${cmd}"
+latest_script_version="~/Downloads/${cmd}_$(date +%Y_%m_%d_at_%R)"
+doit "wget -O- https://raw.githubusercontent.com/wikigazer/check_zoom/main/check_zoom > ${latest_script_version}"
+
+tstamp "Compare local running copy of ${cmd} with freshly downloaded copy"
+doit "cmp ${cmd_path} ${latest_script_version}"
+if [ ${retcode} = 0 ]; then
+	tstamp "Good news: no difference between current and latest version."
+	doit "rm -rf ${latest_script_version}   # delete identical downloaded copy"
+else
+#	latest_version=$(grep version= ${latest_script_version} | grep -v _version)
+	tstamp "+----------------------------------------------------------------------------------------------+"
+	tstamp "| Warning: Current running script ${cmd} version ${version} does not match latest version. |"
+	tstamp "+----------------------------------------------------------------------------------------------+"
+	tstamp "Recommend downloading latest from: https://github.com/wikigazer/check_zoom.git"
+	tstamp "+-----------------------------------------------------------------------------------------------------------------------------+"
+	doit "diff ${cmd_path} ${latest_script_version}  # display differences"
+	doit "rm -rf ${latest_script_version}    #remove downloaded copy"
+	tstamp "+-----------------------------------------------------------------------------------------------------------------------------+"
+fi
+
+
+# Sanity checking ends here for the most part :-) -------------------------------------------------------------------------------------------------------------
+
+# Check for pre-requisite rpm:
+#   32bit => libxcb-xtest0
+#   64bit => lib64xcb-xtest0
+
+# Is ${LIBXCB_RPM} installed?
+
+tstamp "Checking we have ${LIBXCB_RPM} installed"
+tstamp "rpm -qa | grep ${LIBXCB_RPM}"
+current_version=$(rpm -qa | grep -iE ${LIBXCB_RPM})
+if [ $? = 0 ]; then
+	tstamp "Installed ${LIBXCB_RPM} is: ${current_version}"
+else
+	tstamp "${LIBXCB_RPM} is not installed"
+	doit "/bin/sudo urpmi ${LIBXCB_RPM}"
+fi
+
+tstamp "Checking we have the Zoom linux package signing key"
+
+if [ -s ${local_download_dir}/pubkey ]; then
+	tstamp "Local copy of package signing key:"
+	doit "ls -l ${local_download_dir}/pubkey"
+else
+	tstamp "Downloading Zoom linux package signing key"
+	doit "wget -O - https://zoom.us/linux/download/pubkey > ${local_download_dir}/pubkey"
+	doit "ls -l ${local_download_dir}/pubkey"
+fi
+
+tstamp "Checking if zoom linux signing key has been imported"
+doit "rpm -qi gpg-pubkey-61a7c71d-* 2>&1 > /dev/null"
+if [ $? = 0 ]; then
+	tstamp "Zoom linux package signing key is imported"
+else
+	tstamp "Import the package signing key"
+	doit "/bin/sudo rpm --import ${local_download_dir}/pubkey"
+
+	tstamp "Verify package signing key"
+	doit "rpm -qi gpg-pubkey-61a7c71d-*"
+fi
+
+# Is zoom already installed?
+
+# Display currently installed rpm version
+tstamp "Checking installed version of zoom"
+echo "rpm -qa | grep -iE zoom"
+current_version=$(rpm -qa | grep -iE zoom)
+if [ $? = 0 ]; then
+	tstamp "Installed version of zoom is: ${current_version}"
+else
+	tstamp "zoom is not installed"
+fi
+
+# Check if we already have a local copy of zoom RPM in local Downloads
+if [ -s ${f} ]; then
+
+	# We do have a previous download of zoom rpm.
+	# Download currently available zoom rpm and compare with what we previously downloaded.
+        tstamp "${f} was previously downloaded. Checking if current available version is newer."
+
+	# move aside any previously downloaded copy of zoom rpm
+	doit "mv -f ${f} ${f}-"
+	doit "ls -lh ${f}-"
+
+	# Download currently available zoom rpm 
+	# We skip the "-q" on wget because this will take a few minutes
+	# and the user needs to see the download is happening.
+
+	tstamp "downloading current zoom rpm: ${ZOOM_RPM}"
+	doit "wget -O - https://zoom.us/client/latest/${ZOOM_RPM} > ${f}"
+	doit "ls -lh ${f}    # Downloaded rpm"
+
+	# Downloaded version details
+#	echo
+#	doit "rpm -qip ${f}"
+#	echo
+
+	installed_version=$(rpm -qa | grep zoom | sed -e "s/zoom-//")
+	if [ -z "${installed_version}" ]; then
+		installed_version="not already installed"
+		# new install
+		tstamp "+---------------------------------------+"
+		tstamp "| Zoom is not installed. Installing now |"
+		tstamp "+---------------------------------------+"
+		doit "/bin/sudo /sbin/urpmi  ${urpmi_options} ${f}"
+		new_version=$(rpm -qa | grep -iE zoom)
+		tstamp "Installed version: ${new_version}"
+	else
+		tstamp "Installed version: ${installed_version}"
+		downloaded_version=$(rpm -qip ${f} | grep "Source RPM" | awk '{print $4}' | sed -e "s/zoom-//" -e "s/.src.rpm//")
+		tstamp "Downloaded version: ${downloaded_version}"
+
+		if [ "${installed_version}" = "${downloaded_version}" ]; then
+			tstamp "Installed and downloaded versions are same: ${installed_version}"
+			tstamp "Removing duplicate downloaded rpm"
+			doit "rm -f ${f}-"
+			tstamp "+------------------------------------------------------------------------------------+"
+			tstamp "| Latest zoom already installed. Please check again for zoom update at a later time. |"
+			tstamp "+------------------------------------------------------------------------------------+"
+		else
+			tstamp "Installed and downloaded versions are different"
+#			tstamp "   installed:  ${installed_version}"
+#		        tstamp "  downloaded:  ${downloaded_version}"
+
+			tstamp "+---------------------------------+"
+			tstamp "| Installing updated zoom version |"
+			tstamp "+---------------------------------+"
+			doit "/bin/sudo /sbin/urpmi  ${urpmi_options} ${f}"
+
+			new_version=$(rpm -qa | grep -iE zoom)
+			tstamp "${current_version} <- previous"
+			tstamp "${new_version} <- now installed"
+			tstamp "+---------------------------------+"
+			tstamp "| old version: ${current_version} |"
+			tstamp "| new version: ${new_version} |"
+			tstamp "+---------------------------------+"
+		fi
+	fi
+else
+
+# We do not have a previously downloaded copy of zoom rpm.
+# This is probably a brand new install.
+
+# Download, install, and display installed version
+
+        # download available zoom rpm
+        tstamp "Previous download not found. Downloading ${ZOOM_RPM}"
+	doit "wget -O - https://zoom.us/client/latest/${ZOOM_RPM} > ${f}"
+
+	doit "ls -lh ${f}    # downloaded"
+
+        # install
+        tstamp "+---------------------+"
+        tstamp "| New install of zoom |"
+        tstamp "+---------------------+"
+	doit "/bin/sudo /sbin/urpmi  ${urpmi_options} ${f}"
+
+        # Display currently installed rpm version
+	doit "rpm -qa | grep -iE zoom    # display installed zoom version"
+fi
+
+end_epoch=$(date +%s)
+
+tstamp "total duration $(elapsed_time ${start_epoch} ${end_epoch})"
+tstamp "completed"
