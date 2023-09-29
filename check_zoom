@@ -15,12 +15,13 @@
 # Reference   https://wiki.mageia.org/en/Using_Zoom_communication_application
 #             https://github.com/wikigazer/check_zoom.git
 
-              version=2
+              version=3
 
 # Author      paul[dot]blackburn[at]gmail[dot]com
 # Written     2020_06_11
-# Updated     Sat  5 Nov 19:53:52 GMT 2022
+# Updated     Fri 29 Sep 16:30:28 BST 2023
 
+# 2023_09_29  version 3 - tidy up, allow for unknown Mageia version to attempt install
 # 2022_11_05  version 2
 # 2022_11_05  updated for Mageia 9, tidy up completion messages and check for latest version of check_zoom on github
 # 2022_11_05  tidy up completion messages and check for latest version of check_zoom on github
@@ -215,7 +216,7 @@ release=$(cat /etc/release | awk '{ print $3}')
 
 #echo "This is Mageia ${release}"
 case ${release} in 
-        8) tstamp "Mageia 9 OK"
+        9) tstamp "Mageia 9 OK"
                 urpmi_options="--allow-nodeps --force"
                 ;;
         8) tstamp "Mageia 8 OK"
@@ -230,7 +231,9 @@ case ${release} in
         5) tstamp "Mageia 5 is obsolete. Please upgrade to current release."
                 urpmi_options="--allow-nodeps --force"
                 ;;
-        *) fatal "Not supported on Mageia ${release}. Bye!" 
+        *) 	echo
+		warning "Not tested on Mageia ${release}. This may or may not work. Good luck!"
+		echo
                 ;;
 esac
 
@@ -271,14 +274,14 @@ if [ ${retcode} = 0 ]; then
 	doit "rm -rf ${latest_script_version}   # delete identical downloaded copy"
 else
 #	latest_version=$(grep version= ${latest_script_version} | grep -v _version)
-	tstamp "+----------------------------------------------------------------------------------------------+"
+	tstamp "+-------------------------------------------------------------------------------------+"
 	tstamp "| Warning: Current running script ${cmd} version ${version} does not match latest version. |"
-	tstamp "+----------------------------------------------------------------------------------------------+"
+	tstamp "+-------------------------------------------------------------------------------------+"
 	tstamp "Recommend downloading latest from: https://github.com/wikigazer/check_zoom.git"
-	tstamp "+-----------------------------------------------------------------------------------------------------------------------------+"
+	tstamp "+-----------------------------------------------------------------------------------------------+"
 	doit "diff ${cmd_path} ${latest_script_version}  # display differences"
 	doit "rm -rf ${latest_script_version}    #remove downloaded copy"
-	tstamp "+-----------------------------------------------------------------------------------------------------------------------------+"
+	tstamp "+-----------------------------------------------------------------------------------------------+"
 fi
 
 
